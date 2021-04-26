@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import firebirdsql
 
-path_db = "C:\\_Scada\\DB\\06.02.21\\SCADABD.GDB"
+path_db = "C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21\\SCADABD.GDB"
 
 
 @dataclass
@@ -43,68 +43,93 @@ class KlassStruct(PagesStruct):
         self.pages_dict_SQL = {ID: Page(ID=ID, PID=PID, NAME=NAME) for ID, PID, NAME in self.cursor.fetchall()}
 
 
+class ObjectTypeInfo:
+    """
+    Класс для типа
+    """
+
+    def __init__(self, fbd_cur, object_type_name: str, object_type_chanels: list):
+        """
+
+        :param object_type_name:
+        :param object_type_chanels:
+        """
+        self.object_type_name = object_type_name
+        self.object_type_chanels = object_type_chanels
+        self.object_type_id = self.get_obgect_type_id(fbd_cur)
+        self.object_type_chanels_id = self.get_object_type_chanels_id(fbd_cur)
+
+    def get_obgect_type_id(self, fbd_cur):
+        select = f"""select ID from OBJTYPE  where name = '{self.object_type_name}'"""
+        fbd_cur.execute(select)
+        return fbd_cur.fetchall()[0][0]
+
+    def get_object_type_chanels_id(self, fbd_cur):
+        select = f"""select OBJTYPEPARAM.ID, OBJTYPEPARAM.DISC 
+from OBJTYPE JOIN OBJTYPEPARAM 
+ON OBJTYPE.ID = OBJTYPEPARAM.PID 
+where OBJTYPE.NAME = '{self.object_type_name}' and OBJTYPEPARAM.NAME in ('{"', '".join(self.object_type_chanels)}')"""
+
+        fbd_cur.execute(select)
+
+        return {str(ID): DISC for ID, DISC in fbd_cur.fetchall()}
+
+
 class QFSearch:
     """
 
     """
 
-    def __init__(self, fdb_cur, object_types: list, object_chanels: list, id_klass: int):
+    def __init__(self, fdb_cur, object_types: list, id_klass: int):
         """
 
         :param object_types:
         :param object_chanels:
         :param id_klass:
         """
-        self.fdb_cur = fdb_cur
-        marks = self.get_all_marks(object_types, id_klass)
-        return marks
+        self.list_of_object = self.get_all_marks(object_types, id_klass, fdb_cur)
 
-    def get_all_marks(self, object_types, id_klass):
+
+    def get_all_marks(self, object_types, id_klass, fdb_cur):
         """
 
         :param object_types:
         :param id_klass:
         :return:
         """
-        select = f"select ID, MARKA, NAME from CARDS  where klid = {id_klass} and objtypeid in ({','.join(object_types)})"
-        self.fdb_cur.execute(select)
-        # TODO
-        return self.fdb_cur.fetchall()[0]
+        result = []
+        for object_type in object_types:
+            select = f"select ID, MARKA, NAME from CARDS  where klid = {id_klass} and objtypeid = {object_type.object_type_id} "
+            fdb_cur.execute(select)
+            try:
+                db_list = fdb_cur.fetchall()
+                for id, marka, name in db_list:
+                    result.append(
+                        ObjectInfo(marka=marka, name=name, id=id, type_info=object_type, fdb_cur=fdb_cur))
 
-    def get_id_texobj(self, name_texobj):
-        select = f"select ID from CARDS where MARKA = '{name_texobj}' and PLC_GR in (select id from RESOURCES where name='{self.plc_res.text()}' and cardid in (select id from CARDS where marka = '{self.plc_name.text()}'))"
-        self.cur.execute(select)
+            except:
+                result = []
 
-        try:
-            id_tex = [id[0] for id in self.cur][0]
-        except:
-            id_tex = name_texobj
-        return id_tex
+        return result
 
-    def get_id_params(self, texobj_id, param_name):
-        select = f"select CARDPARAMS.ID from CARDPARAMS join OBJTYPEPARAM on CARDPARAMS.OBJTYPEPARAMID = OBJTYPEPARAM.ID " \
-                 f"where CARDPARAMS.CARDID = {texobj_id} and  OBJTYPEPARAM.NAME = '{param_name}' and CARDPARAMS.PLC_GR in (select id from RESOURCES where name='{self.plc_res.text()}' and cardid in (select id from CARDS where marka = '{self.plc_name.text()}'))"
-        self.cur.execute(select)
-        try:
-            id_tex = [id[0] for id in self.cur][0]
-        except:
-            id_tex = param_name
-        return id_tex
 
-    def get_id_texobj_param(self, name):
-        texobj_name, param_name = name.split('.', 1)
-        texobj_id = self.get_id_texobj(texobj_name)
-        if texobj_id != texobj_name:
-            param_id = self.get_id_params(texobj_id, param_name)
-            return param_id
-        return param_name
+class ObjectInfo:
+
+    def __init__(self, marka, name, id, type_info, fdb_cur):
+        self.marka = marka
+        self.name = name
+        self.id = id
+        self.chanels = self.get_chanels(type_info, fdb_cur)
+
+    def get_chanels(self, type_info, fdb_cur):
+        select = f"""select objtypeparamid, id from cardparams  where cardid = {self.id} and  objtypeparamid in ('{"', '".join(type_info.object_type_chanels_id.keys())}')"""
+        fdb_cur.execute(select)
+        return {id: type_info.object_type_chanels_id[str(typeid)] for typeid, id in fdb_cur.fetchall()}
 
 
 class DBResult:
     name_db = 'result2.db'
     path_db_res = os.path.join(os.getcwd(), name_db)
-
-    # __slots__ = []
 
     def __init__(self, path_result, path_fbd, server):
         self.path_fbd = path_fbd
@@ -123,20 +148,18 @@ class DBResult:
         self.cursor = self.conn.cursor()
         self.create_new_table()
 
-    def get_object_type_id(self, object_types):
+    def get_object_type_info(self, object_types: list, chanel_list: list) -> list:
         """
 
+        :param chanel_list:
         :param object_types:
         :return:
         """
-        select = f"""select ID from OBJTYPE  where NAME in ('{"', '".join(object_types)}')"""
-        print(select)
-        self.fdb_cur.execute(select)
+        result_list = []
+        for type, chanels in zip(object_types, chanel_list):
+            result_list.append(ObjectTypeInfo(fbd_cur=self.fdb_cur, object_type_name=type, object_type_chanels=chanels))
 
-        result = [str(id[0]) for id in self.fdb_cur.fetchall()]
-
-        return result
-
+        return result_list
 
     def create_new_table(self):
         # создание таблиц
@@ -179,9 +202,6 @@ class DBResult:
         # фиксирую коммит
         self.conn.commit()
 
-
-
-
     def firebird_db_init(self):
         self.fdb_conn = firebirdsql.connect(
             host=self.server,
@@ -196,16 +216,21 @@ class DBResult:
         # определяем классификаторы
         klid = KlassStruct(self.fdb_cur)
 
-        object_types_id = self.get_object_type_id(['QF_0x3','QF_0x2'])
-
+        object_types_id = self.get_object_type_info(object_types=['QF_0x3', 'QF_0x2'], chanel_list=[
+            ['.MsgStOn', '.MsgStOff', '.MsgStUnc', '.MsgStDbl', '.MsgStInvalid', '.MsgEOff', '.MsgInvalidEOff'],
+            ['.MsgOn', '.MsgOff', '.MsgUnc', '.MsgDbl', '.MsgInvalid']])
 
         electricity = []
+        data_firebird = {}
+
         for klass in klid.pages_dict_SQL.keys():
             klass_data = klid.pages_dict_SQL[klass]
             if "Электроснабжение" in klass_data.NAME:
                 electricity.append(klass_data)
-                qf_mar = QFSearch(fdb_cur=self.fdb_cur, id_klass=klass_data.ID, object_types=object_types_id, object_chanels=[])
-                print('fsd')
+                list_of_object = QFSearch(fdb_cur=self.fdb_cur, id_klass=klass_data.ID,
+                                                                object_types=object_types_id).list_of_object
+                if list_of_object:
+                    data_firebird.update({klass_data.NAME: list_of_object})
 
 
         print('Выполнено')
@@ -214,23 +239,6 @@ class DBResult:
         self.fdb_cur.execute(
             f"select NAME from OBJTYPE where id = {OBJTYPEID}")
         return self.fdb_cur.fetchall()[0][0]
-
-    def find_id_plc(self, plc_name='ICore_2'):
-        self.fdb_cur.execute(f"select ID from CARDS where MARKA = '{plc_name}'")
-        return self.fdb_cur.fetchall()[0][0]
-
-    def show(self):
-        self.cursor.execute("""
-                    SELECT 
-                        name
-                    FROM 
-                        sqlite_master 
-                    WHERE 
-                        type ='table' AND 
-                        name NOT LIKE 'sqlite_%';
-               		""")
-
-        print(self.cursor.fetchall())
 
     def add_addition_row(self, id_marka=0):
         self.fdb_cur.execute(
@@ -267,10 +275,6 @@ class DBResult:
                		""")
 
         print(self.cursor.fetchall())
-
-    def find_plc_source(self, plc_adress=36):
-        self.fdb_cur.execute(f"""select MARKA from CARDS where plc_adress = {plc_adress}""")
-        return [marka[0] for marka in self.fdb_cur.fetchall()]
 
 
 if __name__ == '__main__':
