@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-
+import sqlite3
 import firebirdsql
 
 path_db = "C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21\\SCADABD.GDB"
@@ -190,7 +190,7 @@ class DBResult:
 
     def __init__(self, data_base_path, arh_path):
 
-        self.find_path = FindPath
+        self.find_path = FindPath(path_tecon_archive=arh_path)
         self.path_fbd = self.find_path.find_last_db(data_base_path)
         self.server = '127.0.0.1'
 
@@ -233,29 +233,50 @@ class DBResult:
 
         for klass in klid.pages_dict_SQL.keys():
             klass_data = klid.pages_dict_SQL[klass]
-            if "Электроснабжение" in klass_data.NAME:
+            if "Электроснабжение//Тесты" in klass_data.NAME:
                 electricity.append(klass_data)
                 list_of_object = QFSearch(fdb_cur=self.fdb_cur, id_klass=klass_data.ID,
                                           object_types=object_types_id).list_of_object
                 if list_of_object:
                     data_firebird.update({klass_data.NAME: list_of_object})
 
+        self.search_to_arch(data_firebird)
         print('Выполнено')
 
-    def get_type(self, OBJTYPEID):
+    def get_type(self, objtypeid):
         self.fdb_cur.execute(
-            f"select NAME from OBJTYPE where id = {OBJTYPEID}")
+            f"select NAME from OBJTYPE where id = {objtypeid}")
         return self.fdb_cur.fetchall()[0][0]
+
+    
+    def search_to_arch(self, data_firebird):
+        path_archive = self.find_path.find_path_arch()
+        conn = sqlite3.connect(path_archive)
+        cursor = conn.cursor()
+
+        while path_archive or data_firebird.keys():
+            for evklass in data_firebird.keys():
+                for object in data_firebird[evklass].keys():
+                    for chanel in data_firebird[evklass][object].chanels.keys():
+                        print(data_firebird[evklass][object].chanels[chanel], ' \t',self.answer_to_archive(chanel, cursor))
+
+    def answer_to_archive(self, id, cursor):
+        response = {'80?`\'': 2, '00`\'': 1}
+        select = f"""SELECT Data FROM ArchiveData where Tagid = {id} ORDER BY StoredTime DESC LIMIT 1"""
+        cursor.execute(select)
+        res = cursor.fetchall()
+
+        return response.get(str(res[0][0]).split('\\x')[-1], 0)
 
 
 if __name__ == '__main__':
-    # new_BD = DBResult(data_base_path='C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21',
-    #                   arh_path='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
-    # new_BD.firebird_db_init()
+    new_BD = DBResult(data_base_path='C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21',
+                      arh_path='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
+    new_BD.firebird_db_init()
 
 
-    test_path = FindPath(path_tecon_archive='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
-    test = True
-    while test:
-        test = test_path.find_path_arch()
-        print(test)
+    # test_path = FindPath(path_tecon_archive='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
+    # test = True
+    # while test:
+    #     test = test_path.find_path_arch()
+    #     print(test)

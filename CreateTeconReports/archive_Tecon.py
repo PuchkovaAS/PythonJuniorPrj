@@ -11,7 +11,6 @@ state = {4437: 'On', 4438: 'Off', 4439: 'Unc', 4440: 'Dbl', 4441: 'Invalid'}
 for id in [135539,135540,135541,135538]:
     select = f"""SELECT Data FROM ArchiveData where Tagid = {id} ORDER BY StoredTime DESC LIMIT 1"""
     cursor.execute(select)
-
     res = cursor.fetchall()
     print(str(res[0][0]).split('\\x')[-1])
 
