@@ -1,0 +1,19 @@
+{
+    "data_base_path": "C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21",
+    "arh_path": "C:\\_Scada\\Scada.Archive\\Arc\\Archive",
+    "excel_path": "result.xlsx",
+    "message_unknow": "Нет данных в архиве",
+    "font": {
+        "k": 1.4,
+        "font": 
+            {
+                "size": 12,
+                "name": "Calibri"
+            }    
+    },
+    "type": {
+        "QF_0x3": [".MsgStOn", ".MsgStOff", ".MsgStUnc", ".MsgStDbl", ".MsgStInvalid", ".MsgEOff", ".MsgInvalidEOff"],
+        "QF_0x2": [".MsgOn", ".MsgOff", ".MsgUnc", ".MsgDbl", ".MsgInvalid"],
+        "BOX_VV": [".Msg_Q_Dbl", ".Msg_Q_DU_Dbl", ".Msg_Q_DU_Invalid", ".Msg_Q_DU_Off", ".Msg_Q_DU_On", ".Msg_Q_DU_Unc",".Msg_Q_Invalid", ".Msg_Q_Off", ".Msg_Q_On", ".Msg_Q_Unc", ".Msg_QS_Dbl", ".Msg_QS_Invalid", ".Msg_QS_Off",".Msg_QS_On", ".Msg_QS_Test", ".Msg_QS_Unc"]
+    }
+}

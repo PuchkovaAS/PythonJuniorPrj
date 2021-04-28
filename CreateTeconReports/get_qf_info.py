@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -6,6 +7,7 @@ from enum import Enum
 
 import firebirdsql
 import openpyxl
+from openpyxl.styles import Font
 
 
 class FindPath:
@@ -204,15 +206,19 @@ class ObjectInfo:
             type_info.object_type_chanels_id[str(typeid)]: State.UNKNOWN for typeid, id in data_db}
 
 
+class Settings:
+    def __init__(self, path_settings):
+        with open(path_settings, "r", encoding="utf-8") as read_file:
+            self.__dict__.update(json.load(read_file))
+
+
 class DBResult:
 
-    def __init__(self, data_base_path, arh_path):
-
-        self.find_path = FindPath(path_tecon_archive=arh_path)
-        self.path_fbd = self.find_path.find_last_db(data_base_path)
+    def __init__(self, settings):
+        self.settings = settings
+        self.find_path = FindPath(path_tecon_archive=self.settings.arh_path)
+        self.path_fbd = self.find_path.find_last_db(path=self.settings.data_base_path)
         self.server = '127.0.0.1'
-        self.color_state = {State.UNKNOWN: StateColor.UNKNOWN, State.ARRIVE: StateColor.ARRIVE,
-                            State.GONE: StateColor.GONE}
 
     def get_object_type_info(self, object_types: list, chanel_list: list) -> list:
         """
@@ -227,7 +233,7 @@ class DBResult:
 
         return result_list
 
-    def firebird_db_init(self):
+    def start_analyzing(self):
         self.fdb_conn = firebirdsql.connect(
             host=self.server,
             database=self.path_fbd,
@@ -241,12 +247,8 @@ class DBResult:
         # определяем классификаторы
         klid = KlassStruct(self.fdb_cur)
 
-        object_types_id = self.get_object_type_info(object_types=['QF_0x3', 'QF_0x2', 'BOX_VV'], chanel_list=[
-            ['.MsgStOn', '.MsgStOff', '.MsgStUnc', '.MsgStDbl', '.MsgStInvalid', '.MsgEOff', '.MsgInvalidEOff'],
-            ['.MsgOn', '.MsgOff', '.MsgUnc', '.MsgDbl', '.MsgInvalid'],
-            ['.Msg_Q_Dbl', '.Msg_Q_DU_Dbl', '.Msg_Q_DU_Invalid', '.Msg_Q_DU_Off', '.Msg_Q_DU_On', '.Msg_Q_DU_Unc',
-             '.Msg_Q_Invalid', '.Msg_Q_Off', '.Msg_Q_On', '.Msg_Q_Unc', '.Msg_QS_Dbl', '.Msg_QS_Invalid', '.Msg_QS_Off',
-             '.Msg_QS_On', '.Msg_QS_Test', '.Msg_QS_Unc']])
+        object_types_id = self.get_object_type_info(object_types=self.settings.type.keys(),
+                                                    chanel_list=self.settings.type.values())
 
         electricity = []
         data_firebird = {}
@@ -264,36 +266,40 @@ class DBResult:
         self.search_to_arch(data_firebird)
         self.data_to_excel()
 
-    def column_with(self, text, collumn, list_of_wight):
-        k = 1.3
-        while len(list_of_wight) <= collumn - 1:
-            list_of_wight.append(0)
+    def column_with(self, text, column):
+        k = self.settings.font["k"]
+        while len(self.list_of_wight) <= column - 1:
+            self.list_of_wight.append(0)
 
-        if list_of_wight[collumn - 1] < int(len(text) * k):
-            list_of_wight[collumn - 1] = int(len(text) * k)
+        if self.list_of_wight[column - 1] < int(len(text) * k):
+            self.list_of_wight[column - 1] = int(len(text) * k)
 
-        return list_of_wight
+    def cell_write(self, work_sheet, row, column, text):
+        work_sheet.cell(row=row, column=column).value = text
+        work_sheet.cell(row=row, column=column).font = Font(**self.settings.font["font"])
+        self.column_with(text=text, column=column)
+        return column + 1
 
     def data_to_excel(self):
         wb = openpyxl.Workbook()  # Создали книгу
         for ind_sheet, klass in enumerate(self.result_data.keys()):
             work_sheet = wb.create_sheet(klass.split('/')[-1],
                                          ind_sheet)  # Создали лист с названием и сделали его активным
-            list_of_wight = []
+            self.list_of_wight = []
             for id_object, object in enumerate(self.result_data[klass].keys()):
-                work_sheet.cell(row=id_object + 1, column=1).value = object
-                list_of_wight = self.column_with(text=object, collumn=1, list_of_wight=list_of_wight)
-                collumn = 2
+                column = 1
+                column = self.cell_write(work_sheet=work_sheet, row=id_object + 1, column=column, text=object)
+                column = self.cell_write(work_sheet=work_sheet, row=id_object + 1, column=column,
+                                text=self.result_data[klass][object].name)
+                column_start_mess = column
                 for chanel in self.result_data[klass][object].chanels_state.keys():
                     if self.result_data[klass][object].chanels_state[chanel] == State.ARRIVE:
-                        work_sheet.cell(row=id_object + 1, column=collumn).value = chanel
-                        list_of_wight = self.column_with(text=chanel, collumn=collumn, list_of_wight=list_of_wight)
-                        collumn += 1
-                if collumn == 2:
-                    work_sheet.cell(row=id_object + 1, column=collumn).value = 'Нет данных в архиве'
-                    list_of_wight = self.column_with(text='Нет данных в архиве', collumn=collumn, list_of_wight=list_of_wight)
+                        column = self.cell_write(work_sheet=work_sheet, row=id_object + 1, column=column, text=chanel)
+                if column == column_start_mess:
+                    column = self.cell_write(work_sheet=work_sheet, row=id_object + 1, column=column,
+                                    text=self.settings.message_unknow)
 
-            for ind_coll, collumn_wight in enumerate(list_of_wight):
+            for ind_coll, collumn_wight in enumerate(self.list_of_wight):
                 work_sheet.column_dimensions[chr(65 + ind_coll)].width = collumn_wight
 
                 # work_sheet.cell(row=id_object + 1, column=collumn).fill = PatternFill(fill_type='solid',
@@ -305,6 +311,14 @@ class DBResult:
                 #                                                                                     chanel]])
 
         wb.save('result.xlsx')
+        self.openExcel('result.xlsx')
+
+    def openExcel(self, path_excel):
+        try:
+            # открыть
+            os.system(f'start excel.exe {path_excel}')
+        except:
+            pass
 
     def get_type(self, objtypeid):
         self.fdb_cur.execute(
@@ -372,12 +386,5 @@ class DBResult:
 
 
 if __name__ == '__main__':
-    new_BD = DBResult(data_base_path='C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21',
-                      arh_path='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
-    new_BD.firebird_db_init()
-
-    # test_path = FindPath(path_tecon_archive='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
-    # test = True
-    # while test:
-    #     test = test_path.find_path_arch()
-    #     print(test)
+    new_BD = DBResult(settings=Settings(path_settings='Settings.json'))
+    new_BD.start_analyzing()
