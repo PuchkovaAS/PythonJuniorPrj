@@ -1,9 +1,11 @@
+import copy
 import os
-from dataclasses import dataclass
 import sqlite3
-import firebirdsql
+from dataclasses import dataclass
+from enum import Enum
 
-path_db = "C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21\\SCADABD.GDB"
+import firebirdsql
+import openpyxl
 
 
 class FindPath:
@@ -32,7 +34,7 @@ class FindPath:
         self.exeption_days.append(arh_path)
         return self.get_arh_path(arh_path)
 
-    def find_last(self, path, exception=None, func = os.path.getctime):
+    def find_last(self, path, exception=None, func=os.path.getctime):
         """
 
         :param path:
@@ -65,6 +67,19 @@ class FindPath:
                 return sort_date_list[0][0]
             else:
                 return None
+
+
+class State(Enum):
+    UNKNOWN = 0
+    ARRIVE = 1
+    GONE = 2
+
+
+@dataclass
+class StateColor:
+    GONE: str = '008345'
+    ARRIVE: str = 'ff8345'
+    UNKNOWN: str = 'adacaa'
 
 
 @dataclass
@@ -156,7 +171,7 @@ class QFSearch:
         :param id_klass:
         :return:
         """
-        result = []
+        result = {}
         for object_type in object_types:
             select = f"select ID, MARKA, NAME from CARDS  where klid = {id_klass} and objtypeid = {object_type.object_type_id} "
             fdb_cur.execute(select)
@@ -166,7 +181,8 @@ class QFSearch:
                     result.update(
                         {marka: ObjectInfo(marka=marka, name=name, id=id, type_info=object_type, fdb_cur=fdb_cur)})
 
-            except:
+            except Exception as e:
+                print(e)
                 result = {}
 
         return result
@@ -178,12 +194,14 @@ class ObjectInfo:
         self.marka = marka
         self.name = name
         self.id = id
-        self.chanels = self.get_chanels(type_info, fdb_cur)
+        self.chanels, self.chanels_state = self.get_chanels(type_info, fdb_cur)
 
     def get_chanels(self, type_info, fdb_cur):
         select = f"""select objtypeparamid, id from cardparams  where cardid = {self.id} and  objtypeparamid in ('{"', '".join(type_info.object_type_chanels_id.keys())}')"""
         fdb_cur.execute(select)
-        return {id: type_info.object_type_chanels_id[str(typeid)] for typeid, id in fdb_cur.fetchall()}
+        data_db = fdb_cur.fetchall()
+        return {id: type_info.object_type_chanels_id[str(typeid)] for typeid, id in data_db}, {
+            type_info.object_type_chanels_id[str(typeid)]: State.UNKNOWN for typeid, id in data_db}
 
 
 class DBResult:
@@ -193,6 +211,8 @@ class DBResult:
         self.find_path = FindPath(path_tecon_archive=arh_path)
         self.path_fbd = self.find_path.find_last_db(data_base_path)
         self.server = '127.0.0.1'
+        self.color_state = {State.UNKNOWN: StateColor.UNKNOWN, State.ARRIVE: StateColor.ARRIVE,
+                            State.GONE: StateColor.GONE}
 
     def get_object_type_info(self, object_types: list, chanel_list: list) -> list:
         """
@@ -233,47 +253,128 @@ class DBResult:
 
         for klass in klid.pages_dict_SQL.keys():
             klass_data = klid.pages_dict_SQL[klass]
-            if "Электроснабжение//Тесты" in klass_data.NAME:
+            if "Электроснабжение" in klass_data.NAME:
                 electricity.append(klass_data)
                 list_of_object = QFSearch(fdb_cur=self.fdb_cur, id_klass=klass_data.ID,
                                           object_types=object_types_id).list_of_object
                 if list_of_object:
                     data_firebird.update({klass_data.NAME: list_of_object})
 
+        self.result_data = copy.deepcopy(data_firebird)
         self.search_to_arch(data_firebird)
-        print('Выполнено')
+        self.data_to_excel()
+
+    def column_with(self, text, collumn, list_of_wight):
+        k = 1.3
+        while len(list_of_wight) <= collumn - 1:
+            list_of_wight.append(0)
+
+        if list_of_wight[collumn - 1] < int(len(text) * k):
+            list_of_wight[collumn - 1] = int(len(text) * k)
+
+        return list_of_wight
+
+    def data_to_excel(self):
+        wb = openpyxl.Workbook()  # Создали книгу
+        for ind_sheet, klass in enumerate(self.result_data.keys()):
+            work_sheet = wb.create_sheet(klass.split('/')[-1],
+                                         ind_sheet)  # Создали лист с названием и сделали его активным
+            list_of_wight = []
+            for id_object, object in enumerate(self.result_data[klass].keys()):
+                work_sheet.cell(row=id_object + 1, column=1).value = object
+                list_of_wight = self.column_with(text=object, collumn=1, list_of_wight=list_of_wight)
+                collumn = 2
+                for chanel in self.result_data[klass][object].chanels_state.keys():
+                    if self.result_data[klass][object].chanels_state[chanel] == State.ARRIVE:
+                        work_sheet.cell(row=id_object + 1, column=collumn).value = chanel
+                        list_of_wight = self.column_with(text=chanel, collumn=collumn, list_of_wight=list_of_wight)
+                        collumn += 1
+                if collumn == 2:
+                    work_sheet.cell(row=id_object + 1, column=collumn).value = 'Нет данных в архиве'
+                    list_of_wight = self.column_with(text='Нет данных в архиве', collumn=collumn, list_of_wight=list_of_wight)
+
+            for ind_coll, collumn_wight in enumerate(list_of_wight):
+                work_sheet.column_dimensions[chr(65 + ind_coll)].width = collumn_wight
+
+                # work_sheet.cell(row=id_object + 1, column=collumn).fill = PatternFill(fill_type='solid',
+                #                                                                             start_color=
+                #                                                                             self.color_state[
+                #                                                                                 self.result_data[
+                #                                                                                     klass][
+                #                                                                                     object].chanels_state[
+                #                                                                                     chanel]])
+
+        wb.save('result.xlsx')
 
     def get_type(self, objtypeid):
         self.fdb_cur.execute(
             f"select NAME from OBJTYPE where id = {objtypeid}")
         return self.fdb_cur.fetchall()[0][0]
 
-    
+    def klass_enumerate(self, data_kalss, cursor):
+        klass_dict = copy.deepcopy(data_kalss)
+        for klass in data_kalss.keys():
+            new_klass = self.objects_enumerate(data_objects=data_kalss[klass], cursor=cursor, klass=klass)
+            if klass:
+                klass_dict.update({klass: new_klass})
+            else:
+                klass_dict.pop(klass)
+        return klass_dict
+
+    def objects_enumerate(self, data_objects, cursor, klass):
+        objects_dict = copy.deepcopy(data_objects)
+        for object in data_objects.keys():
+            new_object = self.chanels_enumerate(data_chanels=data_objects[object], cursor=cursor, object=object,
+                                                klass=klass)
+            if new_object:
+                objects_dict.update({object: new_object})
+            else:
+                objects_dict.pop(object)
+        return objects_dict
+
+    def chanels_enumerate(self, data_chanels, cursor, object, klass):
+        chanels_dict = copy.deepcopy(data_chanels.chanels)
+        for chanel in data_chanels.chanels.keys():
+            answer = self.answer_to_archive(chanel, cursor)
+            if answer is not State.UNKNOWN:
+                self.result_data[klass][object].chanels_state[data_chanels.chanels[chanel]] = answer
+                chanels_dict.pop(chanel)
+        data_chanels.chanels = chanels_dict
+        if chanels_dict:
+            return data_chanels
+        else:
+            return None
+
     def search_to_arch(self, data_firebird):
         path_archive = self.find_path.find_path_arch()
         conn = sqlite3.connect(path_archive)
         cursor = conn.cursor()
 
-        while path_archive or data_firebird.keys():
-            for evklass in data_firebird.keys():
-                for object in data_firebird[evklass].keys():
-                    for chanel in data_firebird[evklass][object].chanels.keys():
-                        print(data_firebird[evklass][object].chanels[chanel], ' \t',self.answer_to_archive(chanel, cursor))
+        while path_archive and data_firebird.keys():
+            data_firebird = self.klass_enumerate(data_kalss=data_firebird, cursor=cursor)
+            path_archive = self.find_path.find_path_arch()
+            if path_archive:
+                conn = sqlite3.connect(path_archive)
+                cursor = conn.cursor()
+            else:
+                conn.close()
 
     def answer_to_archive(self, id, cursor):
-        response = {'80?`\'': 2, '00`\'': 1}
+        response = {'80?`\'': State.ARRIVE, '00`\'': State.GONE}
         select = f"""SELECT Data FROM ArchiveData where Tagid = {id} ORDER BY StoredTime DESC LIMIT 1"""
         cursor.execute(select)
         res = cursor.fetchall()
 
-        return response.get(str(res[0][0]).split('\\x')[-1], 0)
+        if res:
+            return response.get(str(res[0][0]).split('\\x')[-1], State.UNKNOWN)
+        else:
+            return State.UNKNOWN
 
 
 if __name__ == '__main__':
     new_BD = DBResult(data_base_path='C:\\_Scada\\DB\\01 KS4 Nimnyrskay\\KS4\\06.02.21',
                       arh_path='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
     new_BD.firebird_db_init()
-
 
     # test_path = FindPath(path_tecon_archive='C:\\_Scada\\Scada.Archive\\Arc\\Archive')
     # test = True
